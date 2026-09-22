@@ -1,0 +1,8 @@
+jalankan ini di terminal, di folder project :
+	python -m venv .venv
+
+-> aktifkan .venv :
+	venv\Scripts\Activate.ps1
+
+lalu install :
+	pip install opencv-python mediapipe numpy
