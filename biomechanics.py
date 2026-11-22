@@ -1,89 +1,16 @@
-import math
 import os
+import tempfile
 import cv2
+import numpy as np
 import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
 
-POSE_CONNECTIONS = [
-    (0, 1), (1, 2), (2, 3), (3, 7), (0, 4), (4, 5), (5, 6), (6, 8),
-    (11, 12),
-    (11, 13), (13, 15),
-    (12, 14), (14, 16),
-    (11, 23), (12, 24), (23, 24),
-    (23, 25), (25, 27),
-    (24, 26), (26, 28),
-    (27, 29), (29, 31),
-    (28, 30), (30, 32),
-    (27, 31), (28, 32)
-]
-
-
-def calculate_angle_2d(a, b, c, width: int, height: int) -> float:
-    """Menghitung sudut 2D (dalam derajat) pada titik pusat b dalam skala piksel."""
-    ax, ay = a.x * width, a.y * height
-    bx, by = b.x * width, b.y * height
-    cx, cy = c.x * width, c.y * height
-
-    angle = math.degrees(
-        math.atan2(cy - by, cx - bx) - math.atan2(ay - by, ax - bx)
-    )
-    angle = abs(angle)
-    return 360.0 - angle if angle > 180.0 else angle
-
-
-def euclidean_distance_2d(a, b, width: int, height: int) -> float:
-    """Menghitung jarak Euclidean dalam piksel antara dua landmark."""
-    dx = (a.x - b.x) * width
-    dy = (a.y - b.y) * height
-    return math.hypot(dx, dy)
-
-
-def detect_running_direction(landmarks) -> int:
-    """
-    Mendeteksi arah hadap pelari dari tampak samping:
-    +1 jika berlari ke arah KANAN layar, -1 jika berlari ke arah KIRI layar.
-    """
-    nose = landmarks[0]
-    mid_shoulder_x = (landmarks[11].x + landmarks[12].x) / 2.0
-    foot_diff = (landmarks[31].x - landmarks[29].x) + (landmarks[32].x - landmarks[30].x)
-
-    score = (nose.x - mid_shoulder_x) + foot_diff
-    return 1 if score >= 0 else -1
-
-
-def detect_foot_strikes(y_series: list, min_distance: int, min_prominence: float) -> list:
-    """
-    Mendeteksi indeks frame saat kaki menyentuh tanah (puncak lokal koordinat Y).
-    Koordinat Y membesar ke arah bawah layar.
-    """
-    n = len(y_series)
-    if n < 3:
-        return [y_series.index(max(y_series))] if n > 0 else []
-
-    peaks = []
-    for i in range(1, n - 1):
-        if y_series[i] >= y_series[i - 1] and y_series[i] > y_series[i + 1]:
-            left_bound = max(0, i - min_distance)
-            right_bound = min(n, i + min_distance + 1)
-            local_min = min(y_series[left_bound:right_bound])
-
-            if (y_series[i] - local_min) >= min_prominence:
-                if not peaks or (i - peaks[-1]) >= min_distance:
-                    peaks.append(i)
-                elif y_series[i] > y_series[peaks[-1]]:
-                    peaks[-1] = i
-
-    if not peaks:
-        peaks.append(y_series.index(max(y_series)))
-    return peaks
-
-
 class RunningBiomechanicsAnalyzer:
     def __init__(self, model_path: str = "models/pose_landmarker_full.task"):
         if not os.path.exists(model_path):
-            raise FileNotFoundError(f"Model MediaPipe tidak ditemukan di: {model_path}")
+            raise FileNotFoundError(f"Model tidak ditemukan di: {model_path}")
 
         base_options = python.BaseOptions(model_asset_path=model_path)
         options = vision.PoseLandmarkerOptions(
@@ -92,226 +19,190 @@ class RunningBiomechanicsAnalyzer:
             num_poses=1,
             min_pose_detection_confidence=0.5,
             min_pose_presence_confidence=0.5,
-            min_tracking_confidence=0.5
+            min_tracking_confidence=0.5,
         )
-        self.detector = vision.PoseLandmarker.create_from_options(options)
+        self.landmarker = vision.PoseLandmarker.create_from_options(options)
 
-    def _create_video_writer(self, output_path: str, fps: float, width: int, height: int):
-        """Mencoba codec yang kompatibel dengan browser web (H.264 / VP8) lalu fallback ke mp4v."""
-        for codec in ["avc1", "vp80", "mp4v"]:
-            fourcc = cv2.VideoWriter_fourcc(*codec)
-            writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
-            if writer.isOpened():
-                return writer
-        return None
+    @staticmethod
+    def _calculate_angle(a, b, c) -> float:
+        """Menghitung sudut (derajat) di titik b dari tiga koordinat (x, y)."""
+        a, b, c = np.array(a), np.array(b), np.array(c)
+        ba = a - b
+        bc = c - b
+        cosine = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc) + 1e-6)
+        return float(np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0))))
 
-    def process_video(self, video_path: str, output_video_path: str = None) -> dict:
-        cap = cv2.VideoCapture(video_path)
+    @staticmethod
+    def _calculate_trunk_lean(hip, shoulder, dir_sign: float = 1.0) -> float:
+        """Kemiringan badan (derajat) terhadap vertikal.
+        Positif = condong ke depan (searah lari), negatif = condong ke belakang."""
+        dx = (shoulder[0] - hip[0]) * dir_sign
+        dy = abs(hip[1] - shoulder[1]) + 1e-6
+        return float(np.degrees(np.arctan2(dx, dy)))
+
+    def _create_browser_video_writer(self, width: int, height: int, fps: float):
+        """Membuat VideoWriter dengan codec H.264/WebM agar bisa diputar di browser Streamlit."""
+        tmp_mp4 = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
+        writer = cv2.VideoWriter(tmp_mp4, cv2.VideoWriter_fourcc(*"avc1"), fps, (width, height))
+        if writer.isOpened():
+            return writer, tmp_mp4
+
+        os.remove(tmp_mp4)
+        tmp_webm = tempfile.NamedTemporaryFile(delete=False, suffix=".webm").name
+        writer = cv2.VideoWriter(tmp_webm, cv2.VideoWriter_fourcc(*"vp80"), fps, (width, height))
+        return writer, tmp_webm
+
+    @staticmethod
+    def _extract_landing_records(leg_records: list) -> list:
+        """Mengembalikan catatan frame saat kaki menyentuh tanah (initial contact)."""
+        if len(leg_records) < 3:
+            return []
+
+        drops = np.array([r["drop"] for r in leg_records])
+        min_contact_drop = np.percentile(drops, 70)
+        landing = []
+
+        for i in range(1, len(leg_records) - 1):
+            curr = leg_records[i]
+            is_local_bottom = curr["drop"] >= leg_records[i - 1]["drop"] and curr["drop"] >= leg_records[i + 1]["drop"]
+            is_ground_level = curr["drop"] >= min_contact_drop
+            is_front_landing = curr["ankle_ahead_of_hip"] >= -0.04 * curr["leg_length"]
+
+            if is_local_bottom and is_ground_level and is_front_landing:
+                landing.append(curr)
+
+        # Fallback untuk klip sangat pendek
+        if not landing:
+            landing = [r for r in leg_records
+                       if r["drop"] >= min_contact_drop and r["ankle_ahead_of_hip"] >= 0]
+
+        return landing
+
+    def process_video(self, input_video_path: str):
+        cap = cv2.VideoCapture(input_video_path)
         if not cap.isOpened():
-            raise ValueError("Video tidak dapat dibuka atau format tidak didukung.")
+            raise ValueError("Gagal membuka file video.")
 
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        if fps <= 0 or math.isnan(fps):
-            fps = 30.0
-
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-        writer = None
-        if output_video_path:
-            writer = self._create_video_writer(output_video_path, fps, width, height)
+        out, output_video_path = self._create_browser_video_writer(width, height, fps)
 
-        # Penampung data deret waktu (temporal tracking)
-        lean_angles = []
-        left_elbow_angles = []
-        right_elbow_angles = []
-        left_knee_angles = []
-        right_knee_angles = []
-        left_ankle_y = []
-        right_ankle_y = []
-        left_overstride_ratios = []
-        right_overstride_ratios = []
-        leg_lengths = []
-        directions = []
-        visibility_scores = []
+        trunk_angles = []
+        elbow_angles = []
+        left_leg_records = []
+        right_leg_records = []
+
+        cyan_bones = [(11, 23), (12, 24), (23, 25), (25, 27), (12, 14), (14, 16)]
+        amber_bones = [(24, 26), (26, 28), (11, 13), (13, 15)]
+        joint_indices = [11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]
 
         frame_idx = 0
-        detected_frames = 0
-        last_timestamp_ms = -1
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
 
-        try:
-            while True:
-                success, frame = cap.read()
-                if not success:
-                    break
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+            timestamp_ms = int((frame_idx * 1000) / fps)
+            frame_idx += 1
 
-                frame_idx += 1
-                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+            result = self.landmarker.detect_for_video(mp_image, timestamp_ms)
 
-                timestamp_ms = int((frame_idx / fps) * 1000)
-                if timestamp_ms <= last_timestamp_ms:
-                    timestamp_ms = last_timestamp_ms + 1
-                last_timestamp_ms = timestamp_ms
+            if result.pose_landmarks:
+                lm = result.pose_landmarks[0]
+                pts = {i: (int(lm[i].x * width), int(lm[i].y * height)) for i in range(33)}
 
-                result = self.detector.detect_for_video(mp_image, timestamp_ms)
+                # Tentukan arah hadap lari (+1 = ke kanan, -1 = ke kiri) dari posisi ujung kaki vs tumit
+                toe_vs_heel = ((lm[31].x - lm[29].x) + (lm[32].x - lm[30].x)) / 2.0
+                if abs(toe_vs_heel) > 0.01:
+                    dir_sign = 1.0 if toe_vs_heel > 0 else -1.0
+                else:
+                    mid_hip_x = (lm[23].x + lm[24].x) / 2.0
+                    dir_sign = 1.0 if lm[0].x >= mid_hip_x else -1.0
 
-                if result.pose_landmarks:
-                    detected_frames += 1
-                    lm = result.pose_landmarks[0]
+                # Pilih sisi dominan untuk postur tubuh & ayunan lengan
+                left_vis = lm[11].visibility + lm[23].visibility + lm[25].visibility
+                right_vis = lm[12].visibility + lm[24].visibility + lm[26].visibility
 
-                    direction = detect_running_direction(lm)
-                    directions.append(direction)
+                if right_vis >= left_vis:
+                    shoulder, elbow, wrist = pts[12], pts[14], pts[16]
+                    hip = pts[24]
+                else:
+                    shoulder, elbow, wrist = pts[11], pts[13], pts[15]
+                    hip = pts[23]
 
-                    # 1. Hitung Kemiringan Badan (Forward Lean)
-                    hip_mid_x = ((lm[23].x + lm[24].x) / 2.0) * width
-                    hip_mid_y = ((lm[23].y + lm[24].y) / 2.0) * height
-                    sh_mid_x = ((lm[11].x + lm[12].x) / 2.0) * width
-                    sh_mid_y = ((lm[11].y + lm[12].y) / 2.0) * height
+                trunk_angles.append(self._calculate_trunk_lean(hip, shoulder, dir_sign))
+                elbow_angles.append(self._calculate_angle(shoulder, elbow, wrist))
 
-                    dx_torso = (sh_mid_x - hip_mid_x) * direction
-                    dy_torso = hip_mid_y - sh_mid_y  # Positif ke arah atas
-                    if dy_torso > 1e-5:
-                        lean_deg = math.degrees(math.atan2(dx_torso, dy_torso))
-                        lean_angles.append(lean_deg)
+                # Rekam data pergerakan kaki kiri (23, 25, 27) & kanan (24, 26, 28)
+                for h_idx, k_idx, a_idx, target_list in [
+                    (23, 25, 27, left_leg_records),
+                    (24, 26, 28, right_leg_records),
+                ]:
+                    if lm[h_idx].visibility > 0.45 and lm[k_idx].visibility > 0.45 and lm[a_idx].visibility > 0.45:
+                        h_pt, k_pt, a_pt = pts[h_idx], pts[k_idx], pts[a_idx]
+                        leg_len = float(np.linalg.norm(np.array(h_pt) - np.array(a_pt))) + 1e-6
 
-                    # 2. Hitung Sudut Siku (Gerakan Lengan)
-                    l_elbow = calculate_angle_2d(lm[11], lm[13], lm[15], width, height)
-                    r_elbow = calculate_angle_2d(lm[12], lm[14], lm[16], width, height)
-                    left_elbow_angles.append(l_elbow)
-                    right_elbow_angles.append(r_elbow)
+                        # Jarak maju pergelangan kaki di depan lutut (0 jika di belakang lutut)
+                        shin_forward_dx = max(0.0, (a_pt[0] - k_pt[0]) * dir_sign)
+                        shin_dy = max(1.0, float(a_pt[1] - k_pt[1]))
+                        shin_angle = float(np.degrees(np.arctan2(shin_forward_dx, shin_dy)))
 
-                    # 3. Hitung Sudut Lutut & Posisi Langkah Kaki
-                    l_knee = calculate_angle_2d(lm[23], lm[25], lm[27], width, height)
-                    r_knee = calculate_angle_2d(lm[24], lm[26], lm[28], width, height)
-                    left_knee_angles.append(l_knee)
-                    right_knee_angles.append(r_knee)
+                        # Metrik baru: posisi seluruh kaki relatif terhadap pinggul
+                        ankle_ahead = float((a_pt[0] - h_pt[0]) * dir_sign)
+                        leg_dy = max(1.0, float(a_pt[1] - h_pt[1]))
+                        leg_angle = float(np.degrees(np.arctan2(ankle_ahead, leg_dy)))
+                        knee_angle = self._calculate_angle(h_pt, k_pt, a_pt)
 
-                    l_leg_len = (
-                        euclidean_distance_2d(lm[23], lm[25], width, height)
-                        + euclidean_distance_2d(lm[25], lm[27], width, height)
-                    )
-                    r_leg_len = (
-                        euclidean_distance_2d(lm[24], lm[26], width, height)
-                        + euclidean_distance_2d(lm[26], lm[28], width, height)
-                    )
-                    avg_leg_len = max((l_leg_len + r_leg_len) / 2.0, 1.0)
-                    leg_lengths.append(avg_leg_len)
+                        target_list.append({
+                            "drop": float(a_pt[1] - h_pt[1]),
+                            "ankle_ahead_of_hip": ankle_ahead,
+                            "leg_length": leg_len,
+                            "shin_angle": shin_angle,
+                            "leg_angle": leg_angle,
+                            "ahead_ratio": ankle_ahead / leg_len,
+                            "knee_angle": knee_angle,
+                        })
 
-                    # Jarak horizontal pergelangan kaki di depan pinggul (ternormalisasi panjang kaki)
-                    l_reach = ((lm[27].x - lm[23].x) * width * direction) / max(l_leg_len, 1.0)
-                    r_reach = ((lm[28].x - lm[24].x) * width * direction) / max(r_leg_len, 1.0)
+                # Gambar kerangka pose pada frame
+                for p1, p2 in cyan_bones:
+                    cv2.line(frame, pts[p1], pts[p2], (190, 215, 55), 3, lineType=cv2.LINE_AA)
+                for p1, p2 in amber_bones:
+                    cv2.line(frame, pts[p1], pts[p2], (50, 200, 255), 3, lineType=cv2.LINE_AA)
+                for idx in joint_indices:
+                    cv2.circle(frame, pts[idx], 5, (40, 190, 255), -1, lineType=cv2.LINE_AA)
 
-                    left_ankle_y.append(lm[27].y * height)
-                    right_ankle_y.append(lm[28].y * height)
-                    left_overstride_ratios.append(l_reach)
-                    right_overstride_ratios.append(r_reach)
+            out.write(frame)
 
-                    # Skor keandalan (rata-rata visibilitas titik tubuh utama)
-                    key_indices = [11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]
-                    frame_vis = sum(lm[i].visibility for i in key_indices) / len(key_indices)
-                    visibility_scores.append(frame_vis)
+        cap.release()
+        out.release()
+        self.landmarker.close()
 
-                    # Gambar skeleton pada video output
-                    if writer:
-                        self._draw_overlay(
-                            frame, lm, width, height,
-                            lean_angles[-1] if lean_angles else 0.0,
-                            (l_elbow + r_elbow) / 2.0,
-                            (l_knee + r_knee) / 2.0
-                        )
+        if not trunk_angles:
+            raise ValueError("Pose pelari tidak terdeteksi dalam video. Pastikan seluruh tubuh terlihat jelas dari samping.")
 
-                if writer:
-                    writer.write(frame)
-
-        finally:
-            cap.release()
-            if writer:
-                writer.release()
-
-        if detected_frames < 5:
-            return {
-                "success": False,
-                "error": "Tubuh pelari tidak terdeteksi dengan jelas pada video. Pastikan seluruh tubuh terlihat dari samping."
-            }
-
-        # Agregasi metrik seluruh video
-        duration_sec = frame_idx / fps
-        avg_leg_px = sum(leg_lengths) / len(leg_lengths)
-        min_step_frames = max(int(0.32 * fps), 3)
-        min_step_lift = 0.06 * avg_leg_px
-
-        l_strikes = detect_foot_strikes(left_ankle_y, min_step_frames, min_step_lift)
-        r_strikes = detect_foot_strikes(right_ankle_y, min_step_frames, min_step_lift)
-
-        # Evaluasi overstriding tepat pada frame foot-strike
-        strike_reaches = (
-            [left_overstride_ratios[i] for i in l_strikes]
-            + [right_overstride_ratios[i] for i in r_strikes]
+        landing = (
+            self._extract_landing_records(left_leg_records)
+            + self._extract_landing_records(right_leg_records)
         )
-        strike_knees = (
-            [left_knee_angles[i] for i in l_strikes]
-            + [right_knee_angles[i] for i in r_strikes]
-        )
+        if not landing:
+            raise ValueError(
+                "Momen pendaratan kaki tidak terdeteksi. Pastikan video tampak samping, "
+                "seluruh tubuh terlihat, dan ada beberapa langkah."
+            )
 
-        avg_overstride_ratio = sum(strike_reaches) / len(strike_reaches)
-        avg_knee_at_strike = sum(strike_knees) / len(strike_knees)
+        def _avg(key: str) -> float:
+            return float(np.mean([r[key] for r in landing]))
 
-        # Estimasi cadence (langkah per menit)
-        total_steps = len(l_strikes) + len(r_strikes)
-        cadence_spm = (total_steps / duration_sec) * 60.0 if duration_sec >= 1.5 else None
-
-        avg_lean = sum(lean_angles) / len(lean_angles) if lean_angles else 0.0
-        avg_l_elbow = sum(left_elbow_angles) / len(left_elbow_angles)
-        avg_r_elbow = sum(right_elbow_angles) / len(right_elbow_angles)
-        avg_elbow = (avg_l_elbow + avg_r_elbow) / 2.0
-        elbow_asymmetry = abs(avg_l_elbow - avg_r_elbow)
-
-        detection_ratio = detected_frames / max(frame_idx, 1)
-        mean_visibility = sum(visibility_scores) / len(visibility_scores)
-        reliability = round(min(1.0, detection_ratio * mean_visibility), 2)
-
-        return {
-            "success": True,
-            "duration_sec": round(duration_sec, 2),
-            "total_frames": frame_idx,
-            "detected_frames": detected_frames,
-            "running_direction": "Kanan" if sum(directions) >= 0 else "Kiri",
-            "reliability_score": reliability,
-            "metrics": {
-                "forward_lean_deg": round(avg_lean, 1),
-                "overstride_ratio": round(avg_overstride_ratio, 3),
-                "knee_angle_at_strike_deg": round(avg_knee_at_strike, 1),
-                "cadence_spm": round(cadence_spm, 1) if cadence_spm else None,
-                "avg_elbow_angle_deg": round(avg_elbow, 1),
-                "left_elbow_deg": round(avg_l_elbow, 1),
-                "right_elbow_deg": round(avg_r_elbow, 1),
-                "elbow_asymmetry_deg": round(elbow_asymmetry, 1),
-            }
+        metrics = {
+            "avg_trunk_lean": float(np.mean(trunk_angles)),
+            "landing_shin_angle": _avg("shin_angle"),
+            "landing_leg_angle": _avg("leg_angle"),
+            "landing_ankle_ahead": _avg("ahead_ratio"),
+            "landing_knee_angle": _avg("knee_angle"),
+            "avg_elbow_angle": float(np.mean(elbow_angles)),
         }
-
-    def _draw_overlay(self, frame, lm, w: int, h: int, lean: float, elbow: float, knee: float):
-        for start_idx, end_idx in POSE_CONNECTIONS:
-            s, e = lm[start_idx], lm[end_idx]
-            if s.visibility > 0.5 and e.visibility > 0.5:
-                pt1 = (int(s.x * w), int(s.y * h))
-                pt2 = (int(e.x * w), int(e.y * h))
-                cv2.line(frame, pt1, pt2, (46, 204, 113), 3)
-
-        for point in lm:
-            if point.visibility > 0.5:
-                cx, cy = int(point.x * w), int(point.y * h)
-                if 0 <= cx < w and 0 <= cy < h:
-                    cv2.circle(frame, (cx, cy), 5, (52, 152, 219), -1)
-
-        # Panel info ringkas di sudut kiri atas video
-        cv2.rectangle(frame, (12, 12), (295, 112), (20, 25, 35), -1)
-        cv2.putText(frame, f"Condong Badan : {lean:.1f} deg", (22, 38),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-        cv2.putText(frame, f"Sudut Siku    : {elbow:.1f} deg", (22, 68),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-        cv2.putText(frame, f"Sudut Lutut   : {knee:.1f} deg", (22, 98),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-
-    def close(self):
-        self.detector.close()
+        return metrics, output_video_path

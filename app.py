@@ -1,198 +1,255 @@
+import base64
 import os
 import tempfile
 import streamlit as st
-from biomechanics import RunningBiomechanicsAnalyzer
-from knowledge_base import RunningFormKnowledgeBase
 
+from biomechanics import RunningBiomechanicsAnalyzer
+from knowledge_base import evaluate_running_form
 
 st.set_page_config(
-    page_title="RunFormers - Running Form Detection",
-    page_icon="🏃",
-    layout="wide"
+    page_title="RunFormers - Analisis Form Lari",
+    page_icon=":material/directions_run:",
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# Styling kartu hasil agar menyerupai wireframe RunFormers
-st.markdown("""
-<style>
-    .result-card {
-        padding: 1.1rem 1.25rem;
-        border-radius: 12px;
-        margin-bottom: 0.9rem;
-        border-left: 6px solid #ccc;
-        background-color: #f8f9fa;
-        color: #1f2937;
-    }
-    .card-good {
-        border-left-color: #16a34a;
-        background-color: #f0fdf4;
-    }
-    .card-warning {
-        border-left-color: #d97706;
-        background-color: #fffbeb;
-    }
-    .card-danger {
-        border-left-color: #dc2626;
-        background-color: #fef2f2;
-    }
-    .card-category {
-        font-size: 0.85rem;
-        font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-        color: #4b5563;
-        margin-bottom: 0.2rem;
-    }
-    .card-title {
-        font-size: 1.15rem;
-        font-weight: 700;
-        margin-bottom: 0.35rem;
-    }
-    .card-advice {
-        font-size: 0.95rem;
-        margin-bottom: 0.3rem;
-    }
-    .card-cf {
-        font-size: 0.8rem;
-        color: #6b7280;
-    }
-</style>
-""", unsafe_allow_html=True)
+def get_icon_uri(icon_name: str) -> str:
+    if os.path.exists(icon_name):
+        ext = os.path.splitext(icon_name)[1].lower()
+        mime = "image/svg+xml" if ext == ".svg" else "image/png"
+        with open(icon_name, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode("utf-8")
+        return f"data:{mime};base64,{b64}"
 
-# Header & Navigasi
-col_logo, col_nav = st.columns([3, 2])
-with col_logo:
-    st.title("🏃 RunFormers")
-    st.caption("Sistem Berbasis Pengetahuan untuk Evaluasi Teknik Lari")
-with col_nav:
-    st.write("")
-    page = st.radio(
-        "Navigasi",
-        ["Beranda", "Analisis"],
-        horizontal=True,
+    base_name = os.path.splitext(os.path.basename(icon_name))[0]
+    for ext, mime in [(".svg", "image/svg+xml"), (".png", "image/png"), (".webp", "image/webp")]:
+        filepath = os.path.join("assets", "icons", base_name + ext)
+        if os.path.exists(filepath):
+            with open(filepath, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode("utf-8")
+            return f"data:{mime};base64,{b64}"
+    return ""
+
+def render_icon(icon_name: str, size: int = 22) -> str:
+    uri = get_icon_uri(icon_name)
+    if not uri:
+        return ""
+    return f'<img src="{uri}" width="{size}" height="{size}" style="object-fit:contain; display:block;" />'
+
+# Muat file CSS eksternal
+with open("assets/style.css", "r", encoding="utf-8") as f:
+    st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+
+# State navigasi halaman dan data hasil analisis (kosong di awal)
+if "page" not in st.session_state:
+    st.session_state.page = "Beranda"
+if "video_path" not in st.session_state:
+    st.session_state.video_path = None
+if "analysis_results" not in st.session_state:
+    st.session_state.analysis_results = None
+
+# --- MODAL PANDUAN VIDEO ---
+@st.dialog("Panduan Pengambilan Video Lari")
+def show_guide_dialog():
+    st.markdown("""
+    Agar deteksi pose **MediaPipe** dan perhitungan sudut biomekanika akurat:
+    1. **Sudut Pengambilan:** Rekam dari **samping (side-view)** sejajar lintasan lari.
+    2. **Framing Penuh:** Pastikan seluruh tubuh dari kepala hingga ujung sepatu terlihat jelas dalam frame.
+    3. **Pencahayaan & Latar:** Gunakan pencahayaan terang dengan latar belakang yang kontras dengan pakaian lari.
+    4. **Durasi Ideal:** Gunakan klip video berdurasi **5–30 detik** dalam format `.MP4`, `.MKV`, `.AVI`, atau `.MOV`.
+    """)
+
+# --- SIDEBAR NAVIGASI ---
+with st.sidebar:
+    st.markdown('<div class="brand-title"><span class="brand-run">Run</span><span class="brand-formers">Formers</span></div>', unsafe_allow_html=True)
+
+    active_bg = "#333D4F"
+    active_color = "#22C58B"
+    inactive_color = "#FFFFFF"
+    beranda_active = st.session_state.page == "Beranda"
+
+    # Cukup tulis nama filenya saja tanpa .png/.svg (sesuaikan dengan nama file di assets/icons/)
+    icon_beranda = get_icon_uri("beranda")
+    icon_analisis = get_icon_uri("analisis")
+
+    st.markdown(f"""
+    <style>
+    .st-key-nav_beranda button,
+    .st-key-nav_analisis button {{
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: flex-start !important;
+        gap: 10px;
+    }}
+
+    .st-key-nav_beranda button::before,
+    .st-key-nav_analisis button::before {{
+        content: "";
+        display: inline-block;
+        width: 18px;
+        height: 18px;
+        flex-shrink: 0;
+        background-size: contain;
+        background-repeat: no-repeat;
+        background-position: center;
+    }}
+
+    .st-key-nav_beranda button {{
+        background-color: {active_bg if beranda_active else "transparent"} !important;
+        color: {active_color if beranda_active else inactive_color} !important;
+    }}
+    .st-key-nav_beranda button::before {{
+        background-image: url("{icon_beranda}");
+    }}
+
+    .st-key-nav_analisis button {{
+        background-color: {active_bg if not beranda_active else "transparent"} !important;
+        color: {active_color if not beranda_active else inactive_color} !important;
+    }}
+    .st-key-nav_analisis button::before {{
+        background-image: url("{icon_analisis}");
+    }}
+    </style>
+    """, unsafe_allow_html=True)
+
+    if st.button("Beranda", key="nav_beranda"):
+        st.session_state.page = "Beranda"
+        st.rerun()
+
+    if st.button("Analisis", key="nav_analisis"):
+        st.session_state.page = "Analisis"
+        st.rerun()
+        
+# --- HALAMAN 1: BERANDA (MAIN PAGE) ---
+if st.session_state.page == "Beranda":
+    uploaded_file = st.file_uploader(
+        "UPLOAD VIDEO FILE (.MP4, .MKV, .AVI, .MOV)",
+        type=["mp4", "mkv", "avi", "mov"],
         label_visibility="collapsed"
     )
 
-st.divider()
-
-# =========================================================
-# HALAMAN 1: BERANDA
-# =========================================================
-if page == "Beranda":
-    st.subheader("Evaluasi Teknik Lari Anda Secara Otomatis")
-    st.write(
-        "Unggah video rekaman lari tampak samping untuk mendapatkan evaluasi posisi badan, "
-        "efisiensi langkah kaki, dan keseimbangan ayunan lengan berbasis aturan biomekanika."
-    )
-
-    st.markdown("### Apa yang bisa dianalisis?")
-    c1, c2, c3 = st.columns(3)
-
-    with c1:
-        st.info("**1. Postur Tubuh**\n\nCek posisi kemiringan badan saat berlari (terlalu tegak, condong ideal 5°–15°, atau membungkuk).")
-        with st.expander("Lihat Panduan Postur"):
-            st.write("Rekam dari arah samping (side-view) sejajar pinggul agar sudut bahu-pinggul terbaca akurat.")
-
-    with c2:
-        st.info("**2. Langkah Kaki**\n\nAnalisis jarak pendaratan kaki terhadap pusat tubuh (*overstride*) dan estimasi ritme langkah (*cadence*).")
-        with st.expander("Lihat Panduan Langkah"):
-            st.write("Pastikan seluruh bagian kaki hingga pergelangan kaki masuk ke dalam bingkai kamera.")
-
-    with c3:
-        st.info("**3. Gerakan Lengan**\n\nPastikan sudut tekukan siku (ideal 65°–110°) dan ayunan tangan kiri-kanan seimbang serta rileks.")
-        with st.expander("Lihat Panduan Lengan"):
-            st.write("Hindari pakaian yang terlalu longgar di area siku dan bahu agar deteksi titik sendi optimal.")
-
-    st.success("Pindah ke menu **Analisis** di bagian atas untuk mulai mengunggah video lari Anda.")
-
-# =========================================================
-# HALAMAN 2: ANALISIS
-# =========================================================
-elif page == "Analisis":
-    st.subheader("UPLOAD VIDEO FILE")
-    uploaded_file = st.file_uploader(
-        "Pilih video seseorang yang sedang berlari (.MP4, .MKV, .AVI, .MOV)",
-        type=["mp4", "mkv", "avi", "mov"]
-    )
+    st.markdown("""
+    <script>
+    const span = window.parent.document.querySelector('[data-testid="stFileUploaderDropzoneInstructions"] span');
+    const small = window.parent.document.querySelector('[data-testid="stFileUploaderDropzoneInstructions"] small');
+    if (span) span.innerText = "UPLOAD VIDEO FILE";
+    if (small) small.innerText = "(.MP4, .MKV, .AVI, .MOV)";
+    </script>
+    """, unsafe_allow_html=True)
 
     if uploaded_file is not None:
-        # Simpan file sementara
-        suffix = os.path.splitext(uploaded_file.name)[1]
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_in:
-            tmp_in.write(uploaded_file.read())
-            input_path = tmp_in.name
+        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_file.name)[1]) as tmp:
+            tmp.write(uploaded_file.read())
+            raw_video_path = tmp.name
 
-        output_path = input_path + "_analyzed.mp4"
+        with st.spinner("Menganalisis postur, langkah kaki, dan ayunan lengan..."):
+            try:
+                analyzer = RunningBiomechanicsAnalyzer(model_path="models/pose_landmarker_full.task")
+                metrics, output_video_path = analyzer.process_video(raw_video_path)
+                st.session_state.video_path = output_video_path
+                st.session_state.analysis_results = evaluate_running_form(metrics)
 
-        if st.button("Mulai Analisis Form Lari", type="primary"):
-            with st.spinner("Mendeteksi pose tubuh dan mengevaluasi aturan biomekanika..."):
-                try:
-                    analyzer = RunningBiomechanicsAnalyzer(model_path="models/pose_landmarker_full.task")
-                    bio_result = analyzer.process_video(input_path, output_video_path=output_path)
-                    analyzer.close()
+                st.session_state.page = "Analisis"
+                st.rerun()
+            except Exception as e:
+                st.error(f"Terjadi kendala saat menganalisis video: {e}")
+                
+        st.session_state.page = "Analisis"
+        st.rerun()
 
-                    kb = RunningFormKnowledgeBase()
-                    eval_result = kb.evaluate(bio_result)
+    col_l, col_mid, col_r = st.columns([2, 1, 2])
+    with col_mid:
+        if st.button("Lihat Panduan", use_container_width=True):
+            show_guide_dialog()
 
-                    st.session_state["bio_result"] = bio_result
-                    st.session_state["eval_result"] = eval_result
-                    st.session_state["output_video"] = output_path
-                except Exception as e:
-                    st.error(f"Terjadi kesalahan saat memproses video: {e}")
+    st.markdown('<div class="section-heading">Apa yang bisa dianalisis?</div>', unsafe_allow_html=True)
 
-    # Tampilkan Hasil Analisis jika tersedia
-    if "eval_result" in st.session_state:
-        eval_res = st.session_state["eval_result"]
-        bio_res = st.session_state["bio_result"]
+    c1, c2, c3 = st.columns(3, gap="medium")
+    with c1:
+        st.markdown(f'<div class="feature-card"><div class="feature-header"><div class="feature-icon-box">{render_icon("assets/icons/postur_sm.png", 20)}</div><p class="feature-title">Postur Tubuh</p></div><p class="feature-desc">Cek posisi badan saat berlari (tegak atau membungkuk)</p></div>', unsafe_allow_html=True)
+    with c2:
+        st.markdown(f'<div class="feature-card"><div class="feature-header"><div class="feature-icon-box">{render_icon("assets/icons/langkah_sm.png", 20)}</div><p class="feature-title">Langkah Kaki</p></div><p class="feature-desc">Analisis panjang langkah dan frekuensi (stride dan cadence)</p></div>', unsafe_allow_html=True)
+    with c3:
+        st.markdown(f'<div class="feature-card"><div class="feature-header"><div class="feature-icon-box">{render_icon("assets/icons/lengan_sm.png", 20)}</div><p class="feature-title">Gerakan Lengan</p></div><p class="feature-desc">Pastikan sudut dan ayunan tangan seimbang dan rileks</p></div>', unsafe_allow_html=True)
+    
+# --- HALAMAN 2: ANALISIS (ANALYSIS PAGE) ---
+elif st.session_state.page == "Analisis":
+    has_video = (
+        st.session_state.video_path is not None
+        and os.path.exists(st.session_state.video_path)
+        and st.session_state.analysis_results is not None
+    )
 
-        if not eval_res.get("success"):
-            st.error(eval_res.get("error"))
+    col_video, col_result = st.columns([1.15, 1], gap="large")
+
+    with col_video:
+        st.markdown('<div class="preview-wrapper"><div class="preview-label">Video Preview</div>', unsafe_allow_html=True)
+        if has_video:
+            st.video(st.session_state.video_path)
         else:
-            st.divider()
-            col_vid, col_res = st.columns([1.1, 1])
+            st.info("Belum ada video yang diunggah. Silakan unggah video di menu Beranda.")
+        st.markdown('</div>', unsafe_allow_html=True)
 
-            with col_vid:
-                st.markdown("### Video Preview")
-                out_vid = st.session_state.get("output_video")
-                if out_vid and os.path.exists(out_vid):
-                    st.video(out_vid)
-                st.caption(
-                    f"Durasi: {bio_res['duration_sec']} detik | "
-                    f"Arah Lari: {bio_res['running_direction']} | "
-                    f"Keandalan Deteksi: {int(bio_res['reliability_score'] * 100)}%"
-                )
+    with col_result:
+        st.markdown('<div class="analysis-heading">HASIL ANALISIS</div>', unsafe_allow_html=True)
 
-            with col_res:
-                st.markdown("### HASIL ANALISIS")
-                st.metric("Skor Keseluruhan Form Lari", f"{eval_res['overall_score']} / 100")
-                st.write(eval_res["overall_summary"])
-
-                category_labels = {
-                    "postur_tubuh": "Postur Tubuh",
-                    "langkah_kaki": "Langkah Kaki",
-                    "gerakan_lengan": "Gerakan Lengan"
+        if has_video:
+            res = st.session_state.analysis_results
+        else:
+            res = {
+                "postur": {
+                    "level": "neutral",
+                    "status": "Belum dianalisis",
+                    "advice": "Unggah video lari untuk mengecek kemiringan postur tubuh."
+                },
+                "langkah": {
+                    "level": "neutral",
+                    "status": "Belum dianalisis",
+                    "advice": "Unggah video lari untuk mengukur jarak langkah (stride)."
+                },
+                "lengan": {
+                    "level": "neutral",
+                    "status": "Belum dianalisis",
+                    "advice": "Unggah video lari untuk mengevaluasi sudut ayunan lengan."
                 }
+            }
 
-                for key, label in category_labels.items():
-                    item = eval_res["categories"].get(key)
-                    if item:
-                        css_class = f"card-{item['status_level']}"
-                        st.markdown(f"""
-                        <div class="result-card {css_class}">
-                            <div class="card-category">{label}</div>
-                            <div class="card-title">{item['title']}</div>
-                            <div class="card-advice">{item['advice']}</div>
-                            <div class="card-cf">Rule: {item['rule_id']} | Tingkat Keyakinan (CF): {int(item['cf_final'] * 100)}%</div>
-                        </div>
-                        """, unsafe_allow_html=True)
+        cards_config = [
+            ("Postur Tubuh", render_icon("assets/icons/postur_sm.png", 44), res["postur"]),
+            ("Langkah Kaki", render_icon("assets/icons/langkah_sm.png", 44), res["langkah"]),
+            ("Gerakan Lengan", render_icon("assets/icons/lengan_sm.png", 44), res["lengan"]),
+        ]
 
-            # Detail Teknis untuk keperluan pengujian / laporan SBP
-            with st.expander("Lihat Detail Parameter Biomekanika & Jejak Inferensi Aturan (KBS)"):
-                m = eval_res["raw_metrics"]
-                m1, m2, m3, m4 = st.columns(4)
-                m1.metric("Kemiringan Badan", f"{m['forward_lean_deg']}°")
-                m2.metric("Rasio Overstride", f"{m['overstride_ratio']}")
-                m3.metric("Estimasi Cadence", f"{m['cadence_spm']} SPM" if m["cadence_spm"] else "Durasi < 1.5s")
-                m4.metric("Rata-rata Sudut Siku", f"{m['avg_elbow_angle_deg']}°")
+        badge_symbol = {
+            "ideal": "✓",
+            "danger": "!",
+            "warning": "▲",
+            "neutral": "—"
+        }
 
-                st.markdown("**Aturan yang Terpicu (Forward Chaining Trace):**")
-                st.table(eval_res["triggered_rules"])
+        for title, icon, data in cards_config:
+            lvl = data["level"]
+            symbol = badge_symbol.get(lvl, "—")
+            st.markdown(
+                f'<div class="result-card card-{lvl}">'
+                f'<div class="result-left">'
+                f'<div class="result-silhouette">{icon}</div>'
+                f'<div>'
+                f'<p class="result-title">{title}</p>'
+                f'<p class="result-status">{data["status"]}</p>'
+                f'<p class="result-advice">{data["advice"]}</p>'
+                f'</div></div>'
+                f'<div class="status-badge badge-{lvl}">{symbol}</div>'
+                f'</div>',
+                unsafe_allow_html=True
+            )
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        b_left, b_mid, b_right = st.columns([1, 1.2, 1])
+        with b_mid:
+            btn_label = "Selesai" if has_video else "Unggah Video"
+            if st.button(btn_label, use_container_width=True):
+                st.session_state.video_path = None
+                st.session_state.analysis_results = None
+                st.session_state.page = "Beranda"
+                st.rerun()

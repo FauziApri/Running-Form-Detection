@@ -1,208 +1,112 @@
-from dataclasses import dataclass
-from typing import Callable, Dict, Any, List
+def cf_combine(cf1: float, cf2: float) -> float:
+    """Menggabungkan dua nilai Certainty Factor dengan tanda yang sama."""
+    return cf1 + cf2 * (1.0 - cf1)
 
+def _evaluasi_langkah(metrics: dict) -> dict:
+    shin = metrics["landing_shin_angle"]
+    leg = metrics.get("landing_leg_angle")      # pinggul -> pergelangan vs vertikal
+    ahead = metrics.get("landing_ankle_ahead")  # jarak ankle di depan pinggul / panjang kaki
+    knee = metrics.get("landing_knee_angle")    # sudut lutut saat kontak
 
-@dataclass
-class KnowledgeRule:
-    rule_id: str
-    category: str          # 'postur_tubuh', 'langkah_kaki', 'gerakan_lengan'
-    status_level: str      # 'good', 'warning', 'danger'
-    title: str
-    advice: str
-    cf_expert: float       # Bobot keyakinan pakar (0.0 - 1.0)
-    condition_text: str
-    condition_fn: Callable[[Dict[str, Any]], bool]
+    evidence = []
+    if shin > 16.0:
+        evidence.append(("tulang kering miring ke depan", 0.55))
+    elif shin > 11.0:
+        evidence.append(("tulang kering agak miring", 0.35))
+    if leg is not None and leg > 16.0:
+        evidence.append(("kaki jauh di depan pinggul", 0.60))
+    if ahead is not None and ahead > 0.28:
+        evidence.append(("pendaratan di depan pusat massa", 0.60))
+    if knee is not None and leg is not None and knee > 160.0 and leg > 11.0:
+        evidence.append(("lutut hampir lurus saat mendarat", 0.50))
 
-
-class RunningFormKnowledgeBase:
-    """
-    Sistem Berbasis Pengetahuan (Knowledge-Based System) menggunakan Forward Chaining
-    dan Certainty Factor untuk mengevaluasi teknik lari.
-    """
-
-    def __init__(self):
-        self.rules: List[KnowledgeRule] = [
-            # =========================================================
-            # DOMAIN 1: POSTUR TUBUH (FORWARD LEAN)
-            # =========================================================
-            KnowledgeRule(
-                rule_id="R01",
-                category="postur_tubuh",
-                status_level="good",
-                title="Sudah Bagus (Condong ideal)",
-                advice="Pertahankan posisi badan yang sedikit condong ke depan dari pergelangan kaki.",
-                cf_expert=0.92,
-                condition_text="IF 5.0 <= forward_lean_deg <= 15.0",
-                condition_fn=lambda f: 5.0 <= f["forward_lean_deg"] <= 15.0
-            ),
-            KnowledgeRule(
-                rule_id="R02",
-                category="postur_tubuh",
-                status_level="warning",
-                title="Terlalu Tegak / Kaku",
-                advice="Condongkan tubuh sedikit ke depan (sekitar 5-15 derajat) dari pergelangan kaki untuk membantu momentum lari.",
-                cf_expert=0.85,
-                condition_text="IF forward_lean_deg < 5.0",
-                condition_fn=lambda f: f["forward_lean_deg"] < 5.0
-            ),
-            KnowledgeRule(
-                rule_id="R03",
-                category="postur_tubuh",
-                status_level="danger",
-                title="Terlalu Membungkuk / Condong",
-                advice="Tegakkan dada, arahkan pandangan lurus ke depan, dan aktifkan otot perut (core) agar pinggul tidak tertekuk.",
-                cf_expert=0.90,
-                condition_text="IF forward_lean_deg > 15.0",
-                condition_fn=lambda f: f["forward_lean_deg"] > 15.0
-            ),
-
-            # =========================================================
-            # DOMAIN 2: LANGKAH KAKI (OVERSTRIDE & CADENCE)
-            # =========================================================
-            KnowledgeRule(
-                rule_id="R04",
-                category="langkah_kaki",
-                status_level="danger",
-                title="Terlalu jauh (overstride)",
-                advice="Pendekkan langkah kaki agar pendaratan lebih dekat ke bawah pusat tubuh dan tingkatkan ritme langkah.",
-                cf_expert=0.90,
-                condition_text="IF overstride_ratio > 0.30 OR (overstride_ratio > 0.26 AND knee_angle_at_strike_deg > 168)",
-                condition_fn=lambda f: (
-                    f["overstride_ratio"] > 0.30
-                    or (f["overstride_ratio"] > 0.26 and f["knee_angle_at_strike_deg"] > 168.0)
-                )
-            ),
-            KnowledgeRule(
-                rule_id="R05",
-                category="langkah_kaki",
-                status_level="warning",
-                title="Ritme Langkah Rendah (Cadence Lambat)",
-                advice="Tingkatkan frekuensi langkah mendekati 160-180 langkah/menit dengan ayunan kaki yang lebih ringan.",
-                cf_expert=0.82,
-                condition_text="IF overstride_ratio <= 0.30 AND cadence_spm IS NOT None AND cadence_spm < 155",
-                condition_fn=lambda f: (
-                    f["overstride_ratio"] <= 0.30
-                    and f["cadence_spm"] is not None
-                    and f["cadence_spm"] < 155.0
-                )
-            ),
-            KnowledgeRule(
-                rule_id="R06",
-                category="langkah_kaki",
-                status_level="good",
-                title="Langkah Efisien & Proporsional",
-                advice="Pendaratan kaki sudah berada dekat di bawah titik berat tubuh. Pertahankan ritme langkah Anda.",
-                cf_expert=0.88,
-                condition_text="IF overstride_ratio <= 0.30 AND (cadence_spm IS None OR cadence_spm >= 155)",
-                condition_fn=lambda f: (
-                    f["overstride_ratio"] <= 0.30
-                    and (f["cadence_spm"] is None or f["cadence_spm"] >= 155.0)
-                )
-            ),
-
-            # =========================================================
-            # DOMAIN 3: GERAKAN LENGAN (ELBOW ANGLE & SYMMETRY)
-            # =========================================================
-            KnowledgeRule(
-                rule_id="R07",
-                category="gerakan_lengan",
-                status_level="warning",
-                title="Sedikit lebar",
-                advice="Rilekskan bahu dan tarik siku lebih ke belakang dengan tekukan sekitar 80-100 derajat.",
-                cf_expert=0.86,
-                condition_text="IF avg_elbow_angle_deg > 110.0",
-                condition_fn=lambda f: f["avg_elbow_angle_deg"] > 110.0
-            ),
-            KnowledgeRule(
-                rule_id="R08",
-                category="gerakan_lengan",
-                status_level="warning",
-                title="Tekukan Siku Terlalu Rapat",
-                advice="Turunkan bahu agar tidak tegang dan longgarkan sedikit sudut siku ke kisaran 80-100 derajat.",
-                cf_expert=0.84,
-                condition_text="IF avg_elbow_angle_deg < 65.0",
-                condition_fn=lambda f: f["avg_elbow_angle_deg"] < 65.0
-            ),
-            KnowledgeRule(
-                rule_id="R09",
-                category="gerakan_lengan",
-                status_level="warning",
-                title="Ayunan Lengan Kurang Simetris",
-                advice="Seimbangkan ayunan lengan kiri dan kanan dari sendi bahu tanpa menyilang garis tengah tubuh.",
-                cf_expert=0.80,
-                condition_text="IF 65.0 <= avg_elbow_angle_deg <= 110.0 AND elbow_asymmetry_deg > 18.0",
-                condition_fn=lambda f: (
-                    65.0 <= f["avg_elbow_angle_deg"] <= 110.0
-                    and f["elbow_asymmetry_deg"] > 18.0
-                )
-            ),
-            KnowledgeRule(
-                rule_id="R10",
-                category="gerakan_lengan",
-                status_level="good",
-                title="Ayunan Lengan Seimbang & Rileks",
-                advice="Sudut siku dan keseimbangan ayunan tangan sudah ideal untuk menjaga stabilitas tubuh.",
-                cf_expert=0.90,
-                condition_text="IF 65.0 <= avg_elbow_angle_deg <= 110.0 AND elbow_asymmetry_deg <= 18.0",
-                condition_fn=lambda f: (
-                    65.0 <= f["avg_elbow_angle_deg"] <= 110.0
-                    and f["elbow_asymmetry_deg"] <= 18.0
-                )
-            ),
-        ]
-
-    def evaluate(self, analysis_result: Dict[str, Any]) -> Dict[str, Any]:
-        """Menjalankan mesin inferensi (Forward Chaining) terhadap fakta hasil ekstraksi video."""
-        if not analysis_result.get("success"):
-            return {"success": False, "error": analysis_result.get("error", "Analisis gagal.")}
-
-        facts = analysis_result["metrics"]
-        cf_evidence = analysis_result["reliability_score"]
-
-        evaluated_categories = {}
-        triggered_rules = []
-
-        for rule in self.rules:
-            if rule.category in evaluated_categories:
-                continue
-
-            if rule.condition_fn(facts):
-                cf_final = round(rule.cf_expert * cf_evidence, 2)
-                evaluated_categories[rule.category] = {
-                    "rule_id": rule.rule_id,
-                    "status_level": rule.status_level,
-                    "title": rule.title,
-                    "advice": rule.advice,
-                    "cf_expert": rule.cf_expert,
-                    "cf_evidence": cf_evidence,
-                    "cf_final": cf_final
-                }
-                triggered_rules.append({
-                    "Rule ID": rule.rule_id,
-                    "Kategori": rule.category.replace("_", " ").title(),
-                    "Kondisi Terpenuhi": rule.condition_text,
-                    "Hasil": rule.title,
-                    "CF Akhir": f"{cf_final * 100:.0f}%"
-                })
-
-        # Penilaian Keseluruhan (Overall Score)
-        score_map = {"good": 100, "warning": 65, "danger": 35}
-        scores = [score_map[v["status_level"]] for v in evaluated_categories.values()]
-        overall_score = round(sum(scores) / len(scores)) if scores else 0
-
-        if overall_score >= 85:
-            overall_summary = "Form lari secara keseluruhan sudah sangat baik dan efisien."
-        elif overall_score >= 60:
-            overall_summary = "Form lari cukup baik, namun ada beberapa indikator teknis yang perlu disesuaikan."
-        else:
-            overall_summary = "Ditemukan beberapa penyimpangan postur yang berisiko menurunkan efisiensi dan memicu cedera."
-
+    if not evidence:
+        # keyakinan "bagus" lebih rendah jika hanya shin yang tersedia
+        cf = 0.85 if leg is not None and ahead is not None else 0.70
         return {
-            "success": True,
-            "overall_score": overall_score,
-            "overall_summary": overall_summary,
-            "reliability_score": cf_evidence,
-            "categories": evaluated_categories,
-            "triggered_rules": triggered_rules,
-            "raw_metrics": facts
+            "level": "ideal",
+            "status": f"Sudah Bagus (CF: {int(cf * 100)}%)",
+            "advice": f"Pendaratan kaki sejajar di bawah tubuh (sudut tulang kering {shin:.1f}°)",
+            "cf": cf,
         }
+
+    cf = 0.0
+    for _, c in evidence:
+        cf = cf_combine(cf, c)
+    cf = min(cf, 0.95)
+
+    if len(evidence) >= 2:
+        level, label = "danger", "Terlalu jauh / overstride"
+        advice = "Pendekkan langkah kaki agar mendarat lebih dekat ke bawah tubuh"
+    else:
+        level, label = "warning", "Langkah sedikit melebar"
+        advice = "Tingkatkan frekuensi langkah agar pendaratan lebih dekat ke bawah pinggul"
+
+    return {
+        "level": level,
+        "status": f"{label} (CF: {int(cf * 100)}%)",
+        "advice": f"{advice} ({', '.join(n for n, _ in evidence)})",
+        "cf": cf,
+    }
+
+def evaluate_running_form(metrics: dict) -> dict:
+    trunk = metrics["avg_trunk_lean"]
+    shin_angle = metrics["landing_shin_angle"]
+    elbow = metrics["avg_elbow_angle"]
+
+    # --- 1. EVALUASI POSTUR TUBUH ---
+    if 5.0 <= trunk <= 16.0:
+        cf_postur = 0.90
+        postur_result = {
+            "level": "ideal",
+            "status": f"Sudah Bagus (CF: {int(cf_postur * 100)}%)",
+            "advice": f"Condong ideal ({trunk:.1f}° ke depan)",
+        }
+    elif trunk < 5.0:
+        cf_postur = 0.72
+        postur_result = {
+            "level": "warning",
+            "status": f"Terlalu tegak (CF: {int(cf_postur * 100)}%)",
+            "advice": f"Condongkan badan sedikit ke depan dari pergelangan kaki ({trunk:.1f}°)",
+        }
+    else:
+        cf_postur = min(0.95, 0.70 + (trunk - 16.0) * 0.02)
+        postur_result = {
+            "level": "danger",
+            "status": f"Terlalu membungkuk (CF: {int(cf_postur * 100)}%)",
+            "advice": f"Tegakkan dada dan pandangan ke depan ({trunk:.1f}°)",
+        }
+
+    # --- 2. EVALUASI LANGKAH KAKI (BERDASARKAN SUDUT PENDARATAN / INITIAL CONTACT) ---
+    langkah_result = _evaluasi_langkah(metrics)
+    cf_langkah = langkah_result.pop("cf")
+    
+    # --- 3. EVALUASI GERAKAN LENGAN ---
+    if 70.0 <= elbow <= 105.0:
+        cf_lengan = 0.90
+        lengan_result = {
+            "level": "ideal",
+            "status": f"Sudah Bagus (CF: {int(cf_lengan * 100)}%)",
+            "advice": f"Sudut ayunan siku kompak dan seimbang ({elbow:.1f}°)",
+        }
+    elif (55.0 <= elbow < 70.0) or (105.0 < elbow <= 122.0):
+        cf_lengan = 0.78
+        ket = "Sedikit lebar" if elbow > 105.0 else "Sedikit terlalu menekuk"
+        lengan_result = {
+            "level": "warning",
+            "status": f"{ket} (CF: {int(cf_lengan * 100)}%)",
+            "advice": f"Rilekskan bahu dan jaga sudut siku sekitar 90° ({elbow:.1f}°)",
+        }
+    else:
+        cf_lengan = 0.88
+        lengan_result = {
+            "level": "danger",
+            "status": f"Ayunan lengan kurang efisien (CF: {int(cf_lengan * 100)}%)",
+            "advice": f"Tarik siku lebih ke belakang dengan sudut mendekati 90° ({elbow:.1f}°)",
+        }
+
+    return {
+        "postur": postur_result,
+        "langkah": langkah_result,
+        "lengan": lengan_result,
+    }

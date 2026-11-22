@@ -1,0 +1,303 @@
+@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap');
+
+html, body, [class*="css"] {
+    font-family: 'Roboto', sans-serif;
+}
+
+/* Sembunyikan header/toolbar bawaan Streamlit */
+header[data-testid="stHeader"], #MainMenu, .stAppDeployButton {
+    display: none !important;
+}
+
+.block-container {
+    padding-top: 2rem !important;
+    padding-bottom: 2rem !important;
+    max-width: 1200px;
+}
+
+/* --- SIDEBAR & BRANDING --- */
+section[data-testid="stSidebar"] {
+    background-color: #232B3A !important;
+    border-right: 1px solid #2E384D;
+    width: 240px !important;
+    min-width: 240px !important;
+    max-width: 240px !important;
+    transform: none !important;
+    margin-left: 0 !important;
+    visibility: visible !important;
+}
+
+/* Sembunyikan tombol tutup/buka sidebar dan kunci area geser agar tidak bisa ditutup */
+[data-testid="stSidebarCollapseButton"],
+[data-testid="collapsedControl"],
+[data-testid="stExpandSidebarButton"],
+[data-testid="stSidebarHeader"] button,
+[data-testid="stSidebar"] > div:nth-child(2) {
+    display: none !important;
+}
+
+/* Rapikan jarak atas logo RunFormers setelah header sidebar disembunyikan */
+[data-testid="stSidebarHeader"] {
+    height: 1.5rem !important;
+    min-height: 1.5rem !important;
+    padding: 0 !important;
+}
+
+.brand-title {
+    font-size: 1.65rem;
+    font-weight: 700;
+    margin-bottom: 1.8rem;
+    padding-left: 0.4rem;
+    letter-spacing: -0.3px;
+}
+.brand-run { color: #FFFFFF; }
+.brand-formers { color: #22C58B; }
+
+/* Tombol navigasi sidebar */
+section[data-testid="stSidebar"] .stButton > button {
+    width: 100%;
+    text-align: left;
+    justify-content: flex-start;
+    border: none;
+    border-radius: 10px;
+    padding: 0.65rem 1rem;
+    font-weight: 500;
+    font-size: 0.95rem;
+    margin-bottom: 0.35rem;
+    transition: background-color 0.2s ease;
+}
+
+/* --- UPLOAD GRADIENT BOX (MAIN PAGE) --- */
+[data-testid="stFileUploader"] {
+    width: 100%;
+}
+
+[data-testid="stFileUploaderDropzone"] {
+    background: linear-gradient(90deg, #1989B8 0%, #27B584 100%) !important;
+    border: none !important;
+    border-radius: 16px !important;
+    min-height: 250px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 2rem !important;
+    cursor: pointer;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+[data-testid="stFileUploaderDropzone"]:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 25px rgba(34, 197, 139, 0.22);
+}
+
+[data-testid="stFileUploaderDropzoneInstructions"] {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    color: #FFFFFF !important;
+}
+
+[data-testid="stFileUploaderDropzoneInstructions"] svg {
+    width: 48px !important;
+    height: 48px !important;
+    color: #FFFFFF !important;
+    fill: #FFFFFF !important;
+    margin-bottom: 0.5rem;
+}
+
+[data-testid="stFileUploaderDropzoneInstructions"] span {
+    font-size: 1.25rem !important;
+    font-weight: 700 !important;
+    color: #FFFFFF !important;
+    text-transform: uppercase;
+}
+
+[data-testid="stFileUploaderDropzoneInstructions"] small {
+    font-size: 0.85rem !important;
+    color: rgba(255, 255, 255, 0.9) !important;
+    margin-top: 0.25rem;
+}
+
+/* Sembunyikan tombol Browse Files kecil agar seluruh area gradient bertindak sebagai tombol */
+[data-testid="stFileUploaderDropzone"] button {
+    display: none !important;
+}
+
+/* --- FEATURE CARDS (MAIN PAGE) --- */
+.section-heading {
+    font-size: 1.2rem;
+    font-weight: 700;
+    color: #FFFFFF;
+    margin-top: 1.5rem;
+    margin-bottom: 1rem;
+}
+
+.feature-card {
+    background-color: #232B3A;
+    border-radius: 12px;
+    padding: 1.25rem;
+    height: 100%;
+    border: 1px solid #2D3748;
+}
+
+.feature-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+}
+
+.feature-icon-box {
+    width: 34px;
+    height: 34px;
+    background-color: #323D52;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #CBD5E1;
+}
+
+.feature-title {
+    font-size: 1rem;
+    font-weight: 700;
+    color: #FFFFFF;
+    margin: 0;
+}
+
+.feature-desc {
+    font-size: 0.85rem;
+    color: #CBD5E1;
+    line-height: 1.45;
+    margin: 0;
+}
+
+/* --- STATUS NETRAL (BELUM ADA VIDEO) --- */
+.card-neutral {
+    background-color: #232B3A;
+    border-color: #384459;
+}
+
+.card-neutral .result-status {
+    color: #94A3B8;
+}
+
+.card-neutral .result-advice {
+    color: #64748B;
+}
+
+.badge-neutral {
+    background-color: #384459;
+    color: #94A3B8;
+}
+
+/* --- VIDEO PREVIEW PANEL (ANALYSIS PAGE) --- */
+.preview-wrapper {
+    background-color: #232B3A;
+    border-radius: 14px;
+    padding: 1rem 1.25rem 1.25rem 1.25rem;
+    border: 1px solid #2E384D;
+}
+
+.preview-label {
+    text-align: center;
+    font-size: 0.9rem;
+    font-weight: 500;
+    color: #E2E8F0;
+    margin-bottom: 0.75rem;
+}
+
+/* --- HASIL ANALISIS CARDS (ANALYSIS PAGE) --- */
+.analysis-heading {
+    text-align: center;
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: #FFFFFF;
+    letter-spacing: 0.5px;
+    margin-bottom: 1rem;
+}
+
+.result-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-radius: 12px;
+    padding: 1rem 1.2rem;
+    margin-bottom: 0.95rem;
+    border-width: 2px;
+    border-style: solid;
+}
+
+.card-ideal {
+    background-color: #1A3A34;
+    border-color: #22C58B;
+}
+
+.card-danger {
+    background-color: #422227;
+    border-color: #E05252;
+}
+
+.card-warning {
+    background-color: #42371D;
+    border-color: #D9A520;
+}
+
+.result-left {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.result-silhouette {
+    width: 48px;
+    height: 56px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.result-title {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: #FFFFFF;
+    margin: 0 0 0.25rem 0;
+}
+
+.result-status {
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: #FFFFFF;
+    margin: 0 0 0.15rem 0;
+}
+
+.result-advice {
+    font-size: 0.82rem;
+    color: #E2E8F0;
+    line-height: 1.35;
+    margin: 0;
+}
+
+.status-badge {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 0.85rem;
+    align-self: flex-start;
+    flex-shrink: 0;
+}
+
+.badge-ideal { background-color: #22C58B; color: #141B29; }
+.badge-danger { background-color: #E05252; color: #141B29; }
+.badge-warning {
+    background-color: transparent;
+    color: #EAB308;
+    font-size: 1.25rem;
+}
