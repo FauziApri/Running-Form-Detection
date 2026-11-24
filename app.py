@@ -71,6 +71,7 @@ with st.sidebar:
     # Cukup tulis nama filenya saja tanpa .png/.svg (sesuaikan dengan nama file di assets/icons/)
     icon_beranda = get_icon_uri("beranda")
     icon_analisis = get_icon_uri("analisis")
+    icon_upload = get_icon_uri("upload")
 
     st.markdown(f"""
     <style>
@@ -108,6 +109,26 @@ with st.sidebar:
     }}
     .st-key-nav_analisis button::before {{
         background-image: url("{icon_analisis}");
+    }}
+
+    /* Ikon upload pada area unggah video */
+    [data-testid="stFileUploaderDropzoneInstructions"]::before {{
+        content: "";
+        width: 64px;
+        height: 64px;
+        margin-bottom: 0.9rem;
+        border-radius: 50%;
+        background-color: rgba(255, 255, 255, 0.16);
+        background-image: url("{icon_upload}");
+        background-position: center;
+        background-repeat: no-repeat;
+        background-size: 30px 30px;
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+        transition: transform 0.2s ease;
+    }}
+
+    [data-testid="stFileUploaderDropzone"]:hover [data-testid="stFileUploaderDropzoneInstructions"]::before {{
+        transform: translateY(-2px);
     }}
     </style>
     """, unsafe_allow_html=True)
